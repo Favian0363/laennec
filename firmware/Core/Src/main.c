@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "selftest.h"
 
 /* USER CODE END Includes */
 
@@ -111,9 +112,11 @@ int main(void)
   {
     Error_Handler();
   }
-
+  
+  
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  laennec_selftest();
   while (1)
   {
 
