@@ -28,6 +28,28 @@
  * the stack is only 1 KB, so putting this on it would crash the board. */
 static laennec_workspace ws;
 
+/* per-stage profiling (LAENNEC_PROFILING, CMake)
+ * features.c calls mark() */
+#define PROFILE_MARKS 10
+static const char* const STAGE_NAMES[PROFILE_MARKS] = {
+    "",
+    "remove mean",
+    "time features (RMS, kurtosis, crest)", 
+    "Hann window, spectrum",
+    "FFT, spectrum",
+    "power + band fractions",
+    "FIR band-pass + abs, envelope",
+    "Hann window, envelope",
+    "FFT, envelope",
+    "envelope fault bands",
+};
+static volatile uint32_t stamp[PROFILE_MARKS];
+static uint64_t stage_total[PROFILE_MARKS];
+
+void laennec_profile_mark(int stage) {
+    if (stage >= 0 && stage < PROFILE_MARKS) stamp[stage] = DWT->CYCCNT;
+}
+
 /* The DWT cycle counter: a 32-bit register that counts every CPU clock cycle
  * (170 million per second here). Turning it on is two register writes; HAL
  * has no driver for it, so this is done at the register level. */
@@ -81,6 +103,8 @@ void laennec_selftest(void) {
         const uint32_t class_cycles = t2 - t1;
         const uint32_t err_pct = (uint32_t)ceilf(feature_error(f, t->pc_features) * 100.0f);
 
+        for (int m = 1; m < PROFILE_MARKS; ++m) stage_total[m] += stamp[m] - stamp[m - 1];
+
         correct += (c == t->truth);
         agree += (c == t->expected);
         total_cycles += feat_cycles + class_cycles;
@@ -105,5 +129,19 @@ void laennec_selftest(void) {
     printf("CPU load:           %lu.%02lu%% of the %lu us frame budget (worst case)\r\n",
            (unsigned long)(worst_us * 100u / budget_us),
            (unsigned long)((worst_us * 10000u / budget_us) % 100u), (unsigned long)budget_us);
+
+#ifdef LAENNEC_PROFILING
+    uint64_t feat_total = 0;
+    for (int m = 1; m < PROFILE_MARKS; ++m) feat_total += stage_total[m];
+    if (feat_total == 0) feat_total = 1;
+    printf("\r\nfeature stages (average per frame):\r\n");
+    printf("%-38s %10s %8s %6s\r\n", "stage", "cycles", "us", "share");
+    for (int m = 1; m < PROFILE_MARKS; ++m) {
+        const uint32_t avg = (uint32_t)(stage_total[m] / LAENNEC_TEST_FRAME_COUNT);
+        printf("%-38s %10lu %8lu %5lu%%\r\n", STAGE_NAMES[m], (unsigned long)avg, (unsigned long)(avg / mhz), (unsigned long)(stage_total[m] * 100u / feat_total));
+#else
+        printf("\r\n(per-stage profile off: add LAENNEC_PROFILING in firmware/CMakeLists.txt)\r\n");
 #endif
+#endif
+}
 }
