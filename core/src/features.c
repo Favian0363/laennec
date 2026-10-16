@@ -2,12 +2,13 @@
 
 #include "laennec/bandpass_coeffs.h"
 #include "laennec/fft.h"
+#include "laennec/tables.h"
 
 #include <math.h>
 
-/* Optional profiling. on laptop, MARK() does nothing. 
- * firmware defines LAENNEC_PROFILING and provides function
- * which records cycle counter so each stage can be measured */
+/* Optional profiling. On the PC MARK() does nothing. The firmware defines
+ * LAENNEC_PROFILING and provides laennec_profile_mark(), which records the
+ * CPU cycle counter, so the cost of each stage below can be measured. */
 #ifdef LAENNEC_PROFILING
 void laennec_profile_mark(int stage);
 #define MARK(stage) laennec_profile_mark(stage)
@@ -18,14 +19,14 @@ void laennec_profile_mark(int stage);
 #define N LAENNEC_FRAME_LEN
 #define HALF (N / 2)
 #define BIN_HZ ((float)LAENNEC_SAMPLE_RATE_HZ / (float)N) /* 11.72 Hz per FFT bin */
-#define PI_F 3.14159265358979f
 #define TINY 1e-20f
 
-/* Periodic Hann window: fades the frame's edges to zero so the FFT doesn't
- * see a jump where the end wraps around to the start (spectral leakage). */
-static float hann(size_t i, size_t len) {
-    return 0.5f - 0.5f * cosf(2.0f * PI_F * (float)i / (float)len);
-}
+/* Periodic Hann windows (tables.h): they fade the frame's edges to zero so
+ * the FFT doesn't see a jump where the end wraps around to the start
+ * (spectral leakage). Precomputed: cosf costs ~175 cycles on the STM32. */
+#if LAENNEC_TABLE_FFT_SIZE != N
+#error "tables.h was generated for a different frame length: run tools/gen_tables.py"
+#endif
 
 static size_t bin_of(float hz) {
     return (size_t)(hz / BIN_HZ + 0.5f); /* nearest bin */
@@ -45,9 +46,9 @@ static void time_features(const float* x, float out[LAENNEC_NUM_FEATURES]) {
     float s2 = 0.0f, s4 = 0.0f, peak = 0.0f;
     for (size_t i = 0; i < N; ++i) {
         const float x2 = x[i] * x[i];
-        s2 += x2; // sum of squares -> RMS
-        s4 += x2 * x2; // sum of 4th powers -> kurtosis
-        if (fabsf(x[i]) > peak) { // -> crest
+        s2 += x2;
+        s4 += x2 * x2;
+        if (fabsf(x[i]) > peak) {
             peak = fabsf(x[i]);
         }
     }
@@ -62,7 +63,7 @@ static void time_features(const float* x, float out[LAENNEC_NUM_FEATURES]) {
 static void spectrum_features(const float* x, laennec_workspace* ws,
                               float out[LAENNEC_NUM_FEATURES]) {
     for (size_t i = 0; i < N; ++i) {
-        ws->re[i] = x[i] * hann(i, N);
+        ws->re[i] = x[i] * LAENNEC_HANN_1024[i];
         ws->im[i] = 0.0f;
     }
     MARK(3);
@@ -104,6 +105,9 @@ static void spectrum_features(const float* x, laennec_workspace* ws,
  * frame). That way the result is the same as a filter running continuously
  * on the board, e.g. on the FMAC. */
 #define VALID (N - LAENNEC_BANDPASS_TAPS + 1) /* 960 samples */
+#if VALID != LAENNEC_ENV_VALID
+#error "tables.h has the wrong envelope window length: run tools/gen_tables.py"
+#endif
 
 static void envelope_features(const float* x, laennec_workspace* ws,
                               float out[LAENNEC_NUM_FEATURES]) {
@@ -122,7 +126,7 @@ static void envelope_features(const float* x, laennec_workspace* ws,
 
     for (size_t i = 0; i < N; ++i) {
         /* Remove the envelope's average, taper it, and pad with zeros to 1024. */
-        ws->re[i] = i < VALID ? (ws->work[i] - mean) * hann(i, VALID) : 0.0f;
+        ws->re[i] = i < VALID ? (ws->work[i] - mean) * LAENNEC_HANN_960[i] : 0.0f;
         ws->im[i] = 0.0f;
     }
     MARK(7);
