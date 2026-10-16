@@ -28,13 +28,14 @@
  * the stack is only 1 KB, so putting this on it would crash the board. */
 static laennec_workspace ws;
 
-/* per-stage profiling (LAENNEC_PROFILING, CMake)
- * features.c calls mark() */
+/* ---- Per-stage profiling (needs LAENNEC_PROFILING, set in firmware/CMakeLists.txt) ----
+ * features.c calls laennec_profile_mark(n) after each stage; we store the
+ * cycle counter at that moment. stamp[n] - stamp[n-1] = cost of stage n. */
 #define PROFILE_MARKS 10
 static const char* const STAGE_NAMES[PROFILE_MARKS] = {
-    "",
+    "",                                  /* mark 0 = start */
     "remove mean",
-    "time features (RMS, kurtosis, crest)", 
+    "time features (RMS, kurtosis, crest)",
     "Hann window, spectrum",
     "FFT, spectrum",
     "power + band fractions",
@@ -79,8 +80,10 @@ void laennec_selftest(void) {
     cycle_counter_start();
     const uint32_t mhz = SystemCoreClock / 1000000u;
 
-    printf("\r\n=== laennec self-test: %d frames from the unseen 3 hp load, CPU at %lu MHz ===\r\n",
-           LAENNEC_TEST_FRAME_COUNT, (unsigned long)mhz);
+    /* __DATE__ / __TIME__ are filled in by the compiler: if this line doesn't
+     * change after a rebuild, the board is not running the new code. */
+    printf("\r\n=== laennec self-test (built %s %s): %d frames from the unseen 3 hp load, CPU at %lu MHz ===\r\n",
+           __DATE__, __TIME__, LAENNEC_TEST_FRAME_COUNT, (unsigned long)mhz);
     printf("file frame  true    board   feature cycles  classify cycles  feat err (%% of tol)\r\n");
 
     int correct = 0, agree = 0;
@@ -131,17 +134,19 @@ void laennec_selftest(void) {
            (unsigned long)((worst_us * 10000u / budget_us) % 100u), (unsigned long)budget_us);
 
 #ifdef LAENNEC_PROFILING
+    /* Where the feature time goes, averaged over all frames. */
     uint64_t feat_total = 0;
     for (int m = 1; m < PROFILE_MARKS; ++m) feat_total += stage_total[m];
-    if (feat_total == 0) feat_total = 1;
+    if (feat_total == 0) feat_total = 1; /* avoid dividing by zero if the counter isn't running */
     printf("\r\nfeature stages (average per frame):\r\n");
     printf("%-38s %10s %8s %6s\r\n", "stage", "cycles", "us", "share");
     for (int m = 1; m < PROFILE_MARKS; ++m) {
         const uint32_t avg = (uint32_t)(stage_total[m] / LAENNEC_TEST_FRAME_COUNT);
-        printf("%-38s %10lu %8lu %5lu%%\r\n", STAGE_NAMES[m], (unsigned long)avg, (unsigned long)(avg / mhz), (unsigned long)(stage_total[m] * 100u / feat_total));
+        printf("%-38s %10lu %8lu %5lu%%\r\n", STAGE_NAMES[m], (unsigned long)avg,
+               (unsigned long)(avg / mhz), (unsigned long)(stage_total[m] * 100u / feat_total));
+    }
 #else
-        printf("\r\n(per-stage profile off: add LAENNEC_PROFILING in firmware/CMakeLists.txt)\r\n");
+    printf("\r\n(per-stage profile off: add LAENNEC_PROFILING in firmware/CMakeLists.txt)\r\n");
 #endif
 #endif
-}
 }
